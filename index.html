@@ -1,0 +1,694 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>战斗地貌生成器原型</title>
+  <style>
+    :root {
+      --bg: #8a8f93;
+      --panel: rgba(33, 36, 39, 0.9);
+      --text: #e8ecef;
+      --muted: #a7b0b6;
+      --accent: #8ab7df;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: #6e7479;
+      color: var(--text);
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+    }
+    .layout {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: 10px;
+      min-height: 100vh;
+      padding: 10px;
+    }
+    .panel {
+      background: var(--panel);
+      border-radius: 10px;
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+    .row {
+      display: grid;
+      grid-template-columns: 70px 1fr 42px;
+      gap: 10px;
+      align-items: center;
+      font-size: 14px;
+    }
+    input[type="range"] { width: 100%; }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .seed-box {
+      display: inline-flex;
+      gap: 6px;
+      align-items: center;
+    }
+    .seed-box input {
+      width: 130px;
+      padding: 4px 6px;
+      border-radius: 6px;
+      border: 1px solid #566068;
+      background: #2a2f34;
+      color: var(--text);
+    }
+    button {
+      border: 1px solid #5e6770;
+      background: #3b434a;
+      color: var(--text);
+      border-radius: 7px;
+      padding: 6px 10px;
+      cursor: pointer;
+    }
+    button:hover { background: #46505a; }
+    #canvasWrap {
+      background: #7d8287;
+      border-radius: 12px;
+      overflow: hidden;
+      min-height: 320px;
+      border: 1px solid #646c72;
+    }
+    canvas { width: 100%; height: 100%; display: block; }
+    .battle-type { color: var(--accent); font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <div class="panel">
+      <div class="row">
+        <label for="hill">丘陵</label>
+        <input id="hill" type="range" min="0" max="100" value="34" />
+        <span id="hillVal">34</span>
+      </div>
+      <div class="row">
+        <label for="river">河流</label>
+        <input id="river" type="range" min="0" max="100" value="33" />
+        <span id="riverVal">33</span>
+      </div>
+      <div class="row">
+        <label for="plain">平原</label>
+        <input id="plain" type="range" min="0" max="100" value="33" />
+        <span id="plainVal">33</span>
+      </div>
+      <div class="meta">
+        <button id="randomBtn">随机生成</button>
+        <div class="seed-box">
+          <span>种子</span>
+          <input id="seedInput" type="text" />
+          <button id="seedBtn">按种子生成</button>
+        </div>
+        <span>战场类型：<span class="battle-type" id="battleType">-</span></span>
+      </div>
+    </div>
+    <div id="canvasWrap">
+      <canvas id="mapCanvas"></canvas>
+    </div>
+  </div>
+
+  <script>
+    const els = {
+      hill: document.getElementById("hill"),
+      river: document.getElementById("river"),
+      plain: document.getElementById("plain"),
+      hillVal: document.getElementById("hillVal"),
+      riverVal: document.getElementById("riverVal"),
+      plainVal: document.getElementById("plainVal"),
+      randomBtn: document.getElementById("randomBtn"),
+      seedInput: document.getElementById("seedInput"),
+      seedBtn: document.getElementById("seedBtn"),
+      battleType: document.getElementById("battleType"),
+      canvasWrap: document.getElementById("canvasWrap"),
+      canvas: document.getElementById("mapCanvas"),
+    };
+    const ctx = els.canvas.getContext("2d");
+    let currentSeed = nextSeed();
+    let mapState = null;
+    let resizeTimer = null;
+
+    const colors = {
+      bgA: "#8d9296",
+      bgB: "#7f858a",
+      riverMain: "#4f79ad",
+      riverEdge: "#7e9ec7",
+      plain: ["#95b181", "#8ba778", "#9ab887"],
+      hill: ["#9f8a68", "#8f7958", "#a59370"],
+      aux: ["#b7be95", "#b4c3a8", "#c3bd9c"],
+    };
+
+    function nextSeed() {
+      return String(Math.floor(Math.random() * 1e9) + 1);
+    }
+
+    function hashSeed(str) {
+      let h = 1779033703 ^ str.length;
+      for (let i = 0; i < str.length; i++) {
+        h = Math.imul(h ^ str.charCodeAt(i), 3432918353);
+        h = (h << 13) | (h >>> 19);
+      }
+      return () => {
+        h = Math.imul(h ^ (h >>> 16), 2246822507);
+        h = Math.imul(h ^ (h >>> 13), 3266489909);
+        return (h ^= h >>> 16) >>> 0;
+      };
+    }
+
+    function createRng(seed) {
+      const seedFn = hashSeed(seed);
+      let a = seedFn();
+      return function () {
+        a += 0x6D2B79F5;
+        let t = a;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+
+    function rand(rng, min, max) {
+      return min + (max - min) * rng();
+    }
+
+    function randInt(rng, min, max) {
+      return Math.floor(rand(rng, min, max + 1));
+    }
+
+    function clamp(v, min, max) {
+      return Math.max(min, Math.min(max, v));
+    }
+
+    function resizeCanvas() {
+      const rect = els.canvasWrap.getBoundingClientRect();
+      els.canvas.width = Math.max(640, Math.floor(rect.width));
+      els.canvas.height = Math.max(360, Math.floor(rect.height));
+    }
+
+    function readWeights() {
+      return {
+        hillWeight: Number(els.hill.value),
+        riverWeight: Number(els.river.value),
+        plainWeight: Number(els.plain.value),
+      };
+    }
+
+    function syncWeightUi(weights) {
+      els.hill.value = weights.hillWeight;
+      els.river.value = weights.riverWeight;
+      els.plain.value = weights.plainWeight;
+      els.hillVal.textContent = String(weights.hillWeight);
+      els.riverVal.textContent = String(weights.riverWeight);
+      els.plainVal.textContent = String(weights.plainWeight);
+    }
+
+    function rebalance(changed) {
+      const w = readWeights();
+      const keys = ["hillWeight", "riverWeight", "plainWeight"];
+      const changedKey = changed + "Weight";
+      const other = keys.filter((k) => k !== changedKey);
+      const value = clamp(w[changedKey], 0, 100);
+      const remain = 100 - value;
+      const sumOther = w[other[0]] + w[other[1]];
+      let a;
+      if (sumOther <= 0) {
+        a = Math.floor(remain / 2);
+      } else {
+        a = Math.round((w[other[0]] / sumOther) * remain);
+      }
+      const b = remain - a;
+      w[changedKey] = value;
+      w[other[0]] = a;
+      w[other[1]] = b;
+      syncWeightUi(w);
+      return w;
+    }
+
+    function generateMap(seed, weights, width, height) {
+      const rng = createRng(seed);
+      const state = {
+        seed,
+        canvas: { width, height, margin: Math.min(width, height) * 0.08 },
+        composition: {},
+        rivers: { main: null, tributaries: [], secondary: [] },
+        terrains: { plains: [], hills: [], aux: [] },
+        analysis: {},
+      };
+      buildSkeleton(state, weights, rng);
+      fillTerrain(state, weights, rng);
+      qualityFix(state, weights, rng);
+      state.analysis = evaluate(state, weights);
+      return state;
+    }
+
+    function buildSkeleton(state, weights, rng) {
+      const { width: w, height: h, margin: m } = state.canvas;
+      const templates = ["horizontal", "diagonal", "central", "side", "clamped"];
+      const tWeights = [0.28, 0.24, 0.18, 0.16, 0.14];
+      let pick = rng(), acc = 0, template = templates[0];
+      for (let i = 0; i < templates.length; i++) {
+        acc += tWeights[i];
+        if (pick <= acc) { template = templates[i]; break; }
+      }
+      const centerJitter = rand(rng, -0.08, 0.08);
+      state.composition = { template, centerJitter };
+      const riverStrength = weights.riverWeight / 100;
+      const mainControls = createMainControls(template, w, h, m, centerJitter, riverStrength, rng);
+      state.rivers.main = smoothPath(mainControls, 8);
+      const tributaryCount = riverStrength < 0.2 ? randInt(rng, 0, 1)
+        : riverStrength < 0.5 ? randInt(rng, 2, 4)
+        : randInt(rng, 4, 7);
+      for (let i = 0; i < tributaryCount; i++) {
+        const trib = createTributary(state.rivers.main, w, h, m, riverStrength, rng);
+        if (trib) state.rivers.tributaries.push(trib);
+      }
+      if (riverStrength > 0.65) {
+        state.rivers.tributaries.forEach((t) => {
+          if (rng() < 0.28) {
+            const sec = createSecondaryTributary(t, w, h, m, rng);
+            if (sec) state.rivers.secondary.push(sec);
+          }
+        });
+      }
+    }
+
+    function createMainControls(template, w, h, m, jitter, riverStrength, rng) {
+      const cx = w * (0.5 + jitter);
+      const cy = h * (0.5 + jitter * 0.5);
+      let start, end;
+      if (template === "horizontal") {
+        start = { x: -m * 0.4, y: cy + rand(rng, -h * 0.2, h * 0.2) };
+        end = { x: w + m * 0.4, y: cy + rand(rng, -h * 0.2, h * 0.2) };
+      } else if (template === "diagonal") {
+        const flip = rng() < 0.5;
+        start = flip ? { x: -m * 0.4, y: h + m * 0.25 } : { x: -m * 0.4, y: -m * 0.25 };
+        end = flip ? { x: w + m * 0.4, y: -m * 0.25 } : { x: w + m * 0.4, y: h + m * 0.25 };
+      } else if (template === "central") {
+        start = { x: rand(rng, 0.2, 0.4) * w, y: -m * 0.25 };
+        end = { x: rand(rng, 0.6, 0.85) * w, y: h + m * 0.25 };
+      } else if (template === "side") {
+        const left = rng() < 0.5;
+        start = { x: left ? w * 0.15 : w * 0.85, y: -m * 0.25 };
+        end = { x: left ? w * 0.22 : w * 0.78, y: h + m * 0.25 };
+      } else {
+        start = { x: -m * 0.4, y: h * rand(rng, 0.25, 0.75) };
+        end = { x: w + m * 0.4, y: h * rand(rng, 0.2, 0.8) };
+      }
+      const bends = clamp(Math.round(3 + riverStrength * 3), 3, 6);
+      const controls = [start];
+      for (let i = 1; i <= bends; i++) {
+        const t = i / (bends + 1);
+        const baseX = start.x + (end.x - start.x) * t;
+        const baseY = start.y + (end.y - start.y) * t;
+        const spread = riverStrength < 0.3 ? 0.1 : 0.16;
+        controls.push({
+          x: baseX + rand(rng, -w * spread, w * spread),
+          y: baseY + rand(rng, -h * spread, h * spread),
+        });
+      }
+      controls.push(end);
+      return controls;
+    }
+
+    function smoothPath(controls, perSeg) {
+      const pts = [];
+      for (let i = 0; i < controls.length - 1; i++) {
+        const p0 = controls[Math.max(i - 1, 0)];
+        const p1 = controls[i];
+        const p2 = controls[i + 1];
+        const p3 = controls[Math.min(i + 2, controls.length - 1)];
+        for (let t = 0; t < perSeg; t++) {
+          const u = t / perSeg;
+          pts.push(catmullRom(p0, p1, p2, p3, u));
+        }
+      }
+      pts.push(controls[controls.length - 1]);
+      return pts;
+    }
+
+    function catmullRom(p0, p1, p2, p3, t) {
+      const t2 = t * t, t3 = t2 * t;
+      return {
+        x: 0.5 * ((2 * p1.x) + (-p0.x + p2.x) * t + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3),
+        y: 0.5 * ((2 * p1.y) + (-p0.y + p2.y) * t + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3),
+      };
+    }
+
+    function createTributary(main, w, h, m, riverStrength, rng) {
+      if (main.length < 10) return null;
+      const idx = randInt(rng, Math.floor(main.length * 0.15), Math.floor(main.length * 0.85));
+      const join = main[idx];
+      const fromEdge = randInt(rng, 0, 3);
+      let source;
+      if (fromEdge === 0) source = { x: rand(rng, m * 0.3, w - m * 0.3), y: -m * 0.3 };
+      if (fromEdge === 1) source = { x: w + m * 0.3, y: rand(rng, m * 0.3, h - m * 0.3) };
+      if (fromEdge === 2) source = { x: rand(rng, m * 0.3, w - m * 0.3), y: h + m * 0.3 };
+      if (fromEdge === 3) source = { x: -m * 0.3, y: rand(rng, m * 0.3, h - m * 0.3) };
+      const mid = {
+        x: (source.x + join.x) * 0.5 + rand(rng, -w * 0.08, w * 0.08),
+        y: (source.y + join.y) * 0.5 + rand(rng, -h * 0.08, h * 0.08),
+      };
+      const preJoin = {
+        x: join.x + (source.x - join.x) * rand(rng, 0.18, 0.3),
+        y: join.y + (source.y - join.y) * rand(rng, 0.18, 0.3),
+      };
+      const path = smoothPath([source, mid, preJoin, join], 7);
+      const len = polylineLength(path);
+      if (len < Math.min(w, h) * 0.12) return null;
+      return { path, level: 1, width: rand(rng, 1.2, 2.6 + riverStrength) };
+    }
+
+    function createSecondaryTributary(parent, w, h, m, rng) {
+      const path = parent.path;
+      if (path.length < 8) return null;
+      const idx = randInt(rng, 2, path.length - 3);
+      const join = path[idx];
+      const source = {
+        x: clamp(join.x + rand(rng, -w * 0.18, w * 0.18), -m * 0.2, w + m * 0.2),
+        y: clamp(join.y + rand(rng, -h * 0.18, h * 0.18), -m * 0.2, h + m * 0.2),
+      };
+      const edgePull = {
+        x: source.x < w / 2 ? source.x - rand(rng, 0, w * 0.1) : source.x + rand(rng, 0, w * 0.1),
+        y: source.y < h / 2 ? source.y - rand(rng, 0, h * 0.1) : source.y + rand(rng, 0, h * 0.1),
+      };
+      const branch = smoothPath([edgePull, source, join], 6);
+      if (polylineLength(branch) < Math.min(w, h) * 0.08) return null;
+      return { path: branch, level: 2, width: rand(rng, 0.8, 1.5) };
+    }
+
+    function polylineLength(path) {
+      let n = 0;
+      for (let i = 1; i < path.length; i++) {
+        const dx = path[i].x - path[i - 1].x;
+        const dy = path[i].y - path[i - 1].y;
+        n += Math.hypot(dx, dy);
+      }
+      return n;
+    }
+
+    function fillTerrain(state, weights, rng) {
+      const { width: w, height: h, margin: m } = state.canvas;
+      const river = state.rivers.main;
+      const plainsBias = weights.plainWeight / 100;
+      const hillsBias = weights.hillWeight / 100;
+      const plainTarget = clamp(0.2 + plainsBias * 0.42 - hillsBias * 0.15, 0.12, 0.62);
+      const hillTarget = clamp(0.2 + hillsBias * 0.42 - plainsBias * 0.14, 0.12, 0.62);
+      const baseScale = Math.min(w, h);
+
+      const plainCounts = tierCounts(weights.plainWeight, rng);
+      const hillCounts = tierCounts(weights.hillWeight, rng);
+
+      for (let i = 0; i < plainCounts.large; i++) {
+        state.terrains.plains.push(makeBlock(nearRiverPoint(river, w, h, rng), rand(rng, baseScale * 0.11, baseScale * 0.18), "plain", rng));
+      }
+      for (let i = 0; i < hillCounts.large; i++) {
+        state.terrains.hills.push(makeBlock(edgeBiasedPoint(w, h, m, rng), rand(rng, baseScale * 0.1, baseScale * 0.17), "hill", rng));
+      }
+      for (let i = 0; i < plainCounts.medium; i++) {
+        state.terrains.plains.push(makeBlock(distributedPoint(i, plainCounts.medium, w, h, rng, river, true), rand(rng, baseScale * 0.06, baseScale * 0.11), "plain", rng));
+      }
+      for (let i = 0; i < hillCounts.medium; i++) {
+        state.terrains.hills.push(makeBlock(distributedPoint(i, hillCounts.medium, w, h, rng, river, false), rand(rng, baseScale * 0.06, baseScale * 0.1), "hill", rng));
+      }
+      for (let i = 0; i < plainCounts.small; i++) {
+        state.terrains.plains.push(makeBlock(randomOpenPoint(w, h, m, rng), rand(rng, baseScale * 0.03, baseScale * 0.06), "plain", rng));
+      }
+      for (let i = 0; i < hillCounts.small; i++) {
+        state.terrains.hills.push(makeBlock(randomOpenPoint(w, h, m, rng), rand(rng, baseScale * 0.03, baseScale * 0.058), "hill", rng));
+      }
+      const auxCount = clamp(Math.round((plainTarget + hillTarget) * 4 + rand(rng, 1, 4)), 3, 9);
+      for (let i = 0; i < auxCount; i++) {
+        state.terrains.aux.push(makeBlock(randomOpenPoint(w, h, m, rng), rand(rng, baseScale * 0.03, baseScale * 0.07), "aux", rng));
+      }
+    }
+
+    function tierCounts(weight, rng) {
+      const t = weight / 100;
+      return {
+        large: clamp(Math.round(1 + t * 4 + rand(rng, -0.4, 0.7)), weight === 0 ? 0 : 1, 6),
+        medium: clamp(Math.round(4 + t * 10 + rand(rng, -1, 2)), weight === 0 ? 0 : 3, 15),
+        small: clamp(Math.round(3 + t * 7 + rand(rng, -1, 2)), weight === 0 ? 0 : 2, 12),
+      };
+    }
+
+    function makeBlock(center, radius, type, rng) {
+      const pointCount = randInt(rng, 7, 12);
+      const pts = [];
+      for (let i = 0; i < pointCount; i++) {
+        const a = (Math.PI * 2 * i) / pointCount + rand(rng, -0.16, 0.16);
+        const r = radius * rand(rng, 0.75, 1.25);
+        pts.push({ x: center.x + Math.cos(a) * r, y: center.y + Math.sin(a) * r });
+      }
+      return { type, center, radius, pts, tone: rng() };
+    }
+
+    function nearRiverPoint(path, w, h, rng) {
+      const idx = randInt(rng, Math.floor(path.length * 0.1), Math.floor(path.length * 0.9));
+      const p = path[idx];
+      const off = rand(rng, -1, 1) * Math.min(w, h) * 0.12;
+      return { x: clamp(p.x + off, 0, w), y: clamp(p.y + off * rand(rng, -0.6, 0.6), 0, h) };
+    }
+
+    function edgeBiasedPoint(w, h, m, rng) {
+      const side = randInt(rng, 0, 3);
+      if (side === 0) return { x: rand(rng, m, w - m), y: rand(rng, m * 0.5, h * 0.25) };
+      if (side === 1) return { x: rand(rng, w * 0.75, w - m * 0.5), y: rand(rng, m, h - m) };
+      if (side === 2) return { x: rand(rng, m, w - m), y: rand(rng, h * 0.75, h - m * 0.5) };
+      return { x: rand(rng, m * 0.5, w * 0.25), y: rand(rng, m, h - m) };
+    }
+
+    function randomOpenPoint(w, h, m, rng) {
+      return { x: rand(rng, m, w - m), y: rand(rng, m, h - m) };
+    }
+
+    function distributedPoint(i, total, w, h, rng, river, preferRiver) {
+      const cols = 4;
+      const rows = 3;
+      const c = i % cols;
+      const r = Math.floor(i / cols) % rows;
+      const x = (c + rand(rng, 0.15, 0.85)) * (w / cols);
+      const y = (r + rand(rng, 0.15, 0.85)) * (h / rows);
+      if (preferRiver && rng() < 0.55) {
+        const rp = nearRiverPoint(river, w, h, rng);
+        return { x: (x + rp.x) * 0.5, y: (y + rp.y) * 0.5 };
+      }
+      return { x, y };
+    }
+
+    function qualityFix(state, weights, rng) {
+      const { width: w, height: h, margin: m } = state.canvas;
+      const grid = sampleCoverage(state, 6, 4);
+      const empties = grid.filter((g) => g.coverage < 0.18);
+      const baseScale = Math.min(w, h);
+      empties.forEach((cell) => {
+        const p = {
+          x: rand(rng, cell.x0, cell.x1),
+          y: rand(rng, cell.y0, cell.y1),
+        };
+        const near = distanceToPolyline(p, state.rivers.main) < baseScale * 0.1;
+        const type = near || weights.plainWeight >= weights.hillWeight ? "plain" : "hill";
+        const arr = type === "plain" ? state.terrains.plains : state.terrains.hills;
+        arr.push(makeBlock(p, rand(rng, baseScale * 0.045, baseScale * 0.08), type, rng));
+      });
+      const maxTrib = clamp(Math.round(1 + (weights.riverWeight / 100) * 8), 1, 8);
+      if (state.rivers.tributaries.length > maxTrib) {
+        state.rivers.tributaries.length = maxTrib;
+      }
+      if (weights.riverWeight === 0) {
+        state.rivers.tributaries = [];
+        state.rivers.secondary = [];
+      }
+      if (weights.hillWeight === 0) state.terrains.hills = [];
+      if (weights.plainWeight === 0) state.terrains.plains = [];
+      if (weights.riverWeight === 0) {
+        const p0 = state.rivers.main[0];
+        const p1 = state.rivers.main[state.rivers.main.length - 1];
+        state.rivers.main = smoothPath([
+          { x: p0.x, y: p0.y + rand(rng, -20, 20) },
+          { x: (p0.x + p1.x) * 0.5, y: (p0.y + p1.y) * 0.5 + rand(rng, -30, 30) },
+          { x: p1.x, y: p1.y + rand(rng, -20, 20) },
+        ], 6);
+      }
+      const need = sampleCoverage(state, 6, 4).reduce((s, c) => s + c.coverage, 0) / 24;
+      if (need < 0.24) {
+        for (let i = 0; i < 6; i++) {
+          const p = randomOpenPoint(w, h, m, rng);
+          const type = weights.plainWeight >= weights.hillWeight ? "plain" : "hill";
+          const arr = type === "plain" ? state.terrains.plains : state.terrains.hills;
+          arr.push(makeBlock(p, rand(rng, baseScale * 0.045, baseScale * 0.085), type, rng));
+        }
+      }
+    }
+
+    function sampleCoverage(state, cols, rows) {
+      const { width: w, height: h } = state.canvas;
+      const result = [];
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const x0 = (c / cols) * w;
+          const x1 = ((c + 1) / cols) * w;
+          const y0 = (r / rows) * h;
+          const y1 = ((r + 1) / rows) * h;
+          const cx = (x0 + x1) * 0.5;
+          const cy = (y0 + y1) * 0.5;
+          const p = { x: cx, y: cy };
+          let coverage = 0;
+          const blocks = [...state.terrains.plains, ...state.terrains.hills, ...state.terrains.aux];
+          for (const b of blocks) {
+            if (Math.hypot(b.center.x - p.x, b.center.y - p.y) < b.radius * 1.12) coverage += 1;
+          }
+          if (distanceToPolyline(p, state.rivers.main) < Math.min(w, h) * 0.06) coverage += 0.6;
+          result.push({ x0, x1, y0, y1, coverage: clamp(coverage / 2.2, 0, 1) });
+        }
+      }
+      return result;
+    }
+
+    function distanceToPolyline(p, path) {
+      let best = Infinity;
+      for (let i = 1; i < path.length; i++) {
+        best = Math.min(best, distToSegment(p, path[i - 1], path[i]));
+      }
+      return best;
+    }
+
+    function distToSegment(p, a, b) {
+      const l2 = (b.x - a.x) ** 2 + (b.y - a.y) ** 2;
+      if (l2 === 0) return Math.hypot(p.x - a.x, p.y - a.y);
+      let t = ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / l2;
+      t = clamp(t, 0, 1);
+      return Math.hypot(p.x - (a.x + t * (b.x - a.x)), p.y - (a.y + t * (b.y - a.y)));
+    }
+
+    function evaluate(state, weights) {
+      const coverageCells = sampleCoverage(state, 6, 4);
+      const avgCoverage = coverageCells.reduce((s, c) => s + c.coverage, 0) / coverageCells.length;
+      const tributaryCount = state.rivers.tributaries.length + state.rivers.secondary.length;
+      const riverComplexity = clamp((polylineLength(state.rivers.main) / Math.min(state.canvas.width, state.canvas.height)) * 0.3 + tributaryCount * 0.09, 0, 1);
+      const emptyCells = coverageCells.filter((c) => c.coverage < 0.16).length;
+      return {
+        coverage: avgCoverage,
+        riverComplexity,
+        emptyCells,
+        label: classifyBattle(weights, { avgCoverage, tributaryCount }),
+      };
+    }
+
+    function classifyBattle(weights, metrics) {
+      const { hillWeight: h, riverWeight: r, plainWeight: p } = weights;
+      if (r >= 55 && p >= 30) return metrics.tributaryCount > 5 ? "河网阻击战" : "水岸攻防战";
+      if (h >= 55 && r >= 30) return "丘陵穿插战";
+      if (h >= 60 && p <= 20 && r <= 20) return "山地遭遇战";
+      if (p >= 58 && r <= 22) return "平原会战";
+      if (p >= 48 && r >= 35) return "河谷争夺战";
+      if (metrics.avgCoverage > 0.34 && h > 25 && p > 25 && r > 25) return "混合地貌攻防战";
+      return "复杂地形遭遇战";
+    }
+
+    function draw(state) {
+      const { width: w, height: h } = state.canvas;
+      const g = ctx.createLinearGradient(0, 0, w, h);
+      g.addColorStop(0, colors.bgA);
+      g.addColorStop(1, colors.bgB);
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, w, h);
+
+      drawBlocks(state.terrains.aux, colors.aux);
+      drawBlocks(state.terrains.plains, colors.plain);
+      drawBlocks(state.terrains.hills, colors.hill);
+      drawRiver(state.rivers.main, 6.2 + (readWeights().riverWeight / 100) * 4.5);
+      state.rivers.tributaries.forEach((t) => drawRiver(t.path, t.width + 0.8));
+      state.rivers.secondary.forEach((t) => drawRiver(t.path, t.width));
+    }
+
+    function drawBlocks(blocks, palette) {
+      for (const b of blocks) {
+        const toneIdx = Math.min(palette.length - 1, Math.floor(b.tone * palette.length));
+        ctx.fillStyle = palette[toneIdx];
+        ctx.beginPath();
+        const pts = b.pts;
+        for (let i = 0; i < pts.length; i++) {
+          const p = pts[i];
+          const n = pts[(i + 1) % pts.length];
+          const mx = (p.x + n.x) * 0.5;
+          const my = (p.y + n.y) * 0.5;
+          if (i === 0) ctx.moveTo(mx, my);
+          else ctx.quadraticCurveTo(p.x, p.y, mx, my);
+        }
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+
+    function drawRiver(path, width) {
+      ctx.lineJoin = "round";
+      ctx.lineCap = "round";
+      ctx.strokeStyle = colors.riverEdge;
+      ctx.lineWidth = width + 1.4;
+      ctx.beginPath();
+      ctx.moveTo(path[0].x, path[0].y);
+      for (let i = 1; i < path.length; i++) ctx.lineTo(path[i].x, path[i].y);
+      ctx.stroke();
+
+      ctx.strokeStyle = colors.riverMain;
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      ctx.moveTo(path[0].x, path[0].y);
+      for (let i = 1; i < path.length; i++) ctx.lineTo(path[i].x, path[i].y);
+      ctx.stroke();
+    }
+
+    function regenerate(newSeed = true) {
+      if (newSeed) currentSeed = nextSeed();
+      else currentSeed = els.seedInput.value.trim() || currentSeed;
+      els.seedInput.value = currentSeed;
+      resizeCanvas();
+      const weights = readWeights();
+      mapState = generateMap(currentSeed, weights, els.canvas.width, els.canvas.height);
+      els.battleType.textContent = mapState.analysis.label;
+      draw(mapState);
+    }
+
+    function redrawWithSameSeed() {
+      if (!mapState) return regenerate(false);
+      resizeCanvas();
+      const weights = readWeights();
+      mapState = generateMap(currentSeed, weights, els.canvas.width, els.canvas.height);
+      els.battleType.textContent = mapState.analysis.label;
+      draw(mapState);
+    }
+
+    function bindUi() {
+      ["hill", "river", "plain"].forEach((k) => {
+        els[k].addEventListener("input", () => {
+          rebalance(k);
+          regenerate(true);
+        });
+      });
+      els.randomBtn.addEventListener("click", () => regenerate(true));
+      els.seedBtn.addEventListener("click", () => regenerate(false));
+      els.seedInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") regenerate(false);
+      });
+      window.addEventListener("resize", () => {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(redrawWithSameSeed, 120);
+      });
+    }
+
+    syncWeightUi(readWeights());
+    bindUi();
+    regenerate(true);
+  </script>
+</body>
+</html>
