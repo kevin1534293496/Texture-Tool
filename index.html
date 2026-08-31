@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>战斗地貌生成器</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="app">
+    <section class="controls">
+      <h1>战斗地貌生成器</h1>
+
+      <div class="slider-group">
+        <label for="hillWeight">丘陵 <span id="hillValue">34</span>%</label>
+        <input id="hillWeight" type="range" min="0" max="100" value="34" />
+      </div>
+
+      <div class="slider-group">
+        <label for="riverWeight">河流 <span id="riverValue">33</span>%</label>
+        <input id="riverWeight" type="range" min="0" max="100" value="33" />
+      </div>
+
+      <div class="slider-group">
+        <label for="plainWeight">平原 <span id="plainValue">33</span>%</label>
+        <input id="plainWeight" type="range" min="0" max="100" value="33" />
+      </div>
+
+      <div class="actions">
+        <button id="generateBtn" type="button">随机生成</button>
+      </div>
+
+      <div class="meta">
+        <p>种子：<code id="seedDisplay"></code></p>
+        <p>战场类型：<strong id="battleType"></strong></p>
+      </div>
+    </section>
+
+    <section class="canvas-wrap">
+      <canvas id="mapCanvas"></canvas>
+    </section>
+  </main>
+
+  <script src="script.js"></script>
+</body>
+</html>
